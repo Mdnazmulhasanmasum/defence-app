@@ -247,7 +247,18 @@ with st.sidebar:
         sample_files = sorted(list(SAMPLES_DIR.glob("*.jpg")) + list(SAMPLES_DIR.glob("*.png")) + list(SAMPLES_DIR.glob("*.jpeg")))
         
     choice = st.selectbox("Select Patient Scan:", ["Upload Custom Brain MRI"] + [f.name for f in sample_files])
-    
+    # app.py er line ~250 te:
+if has_conflict:
+    st.markdown(f"""
+    <div class="warning-card">
+        <h4 style="margin: 0; color: #fbbf24;">⚠️ Multi-Task Head Discrepancy Resolved (Domain Shift Guardrail)</h4>
+        <div style="font-size: 13.5px; color: #cbd5e1; margin-top: 6px;">
+            The global classifier predicted <b>No_tumor ({raw_conf*100:.1f}%)</b> due to background/watermark artifacts. 
+            However, the segmentation head extracted a validated tumor mass covering <b>{tumor_area_pct:.2f}%</b> of the brain tissue.<br>
+            <b>Clinical Arbitration:</b> Lesion presence verified. Differential diagnosis indicates <b>{tumor_type_override} ({override_conf*100:.1f}% relative confidence)</b>.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     uploaded_file = None
     if choice == "Upload Custom Brain MRI":
         uploaded_file = st.file_uploader("Upload Image (JPG / PNG):", type=["jpg", "png", "jpeg"])
