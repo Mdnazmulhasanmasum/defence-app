@@ -1,4 +1,3 @@
-
 import io, json, hashlib, traceback
 from pathlib import Path
 import numpy as np
@@ -131,13 +130,15 @@ def read_meta(path):
 
 meta = read_meta(META_PATH)
 
+# Optimized Single-Thread CPU Loader (CPU Throttling Prevention)
 @st.cache_resource
 def load_onnx_model(model_path_str):
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1  # 2 theke 1 korun
+    opts.intra_op_num_threads = 1
     opts.inter_op_num_threads = 1
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     return ort.InferenceSession(model_path_str, sess_options=opts, providers=["CPUExecutionProvider"])
+
 if not MODEL_PATH.exists():
     st.error(f"❌ Model file not found. Checked: {[str(p) for p in MODEL_PATHS]}")
     st.stop()
@@ -167,50 +168,37 @@ cls_name = out_names[0]
 seg_name = out_names[1] if len(out_names) > 1 else None
 attr_name = out_names[2] if len(out_names) > 2 else None
 
-# ----------------- ROBUST PREPROCESSING FUNCTIONS -----------------
+# ----------------- PREPROCESSING FUNCTIONS -----------------
 def auto_crop_brain(pil_img):
-    """Crops background black margins and watermarks around skull contour."""
     img_gray = np.array(pil_img.convert("L"))
     _, thresh = cv2.threshold(img_gray, 22, 255, cv2.THRESH_BINARY)
-    
-    # Morphological closing to seal skull boundary
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
         c = max(contours, key=cv2.contourArea)
         if cv2.contourArea(c) > (img_gray.shape[0] * img_gray.shape[1] * 0.10):
             x, y, w, h = cv2.boundingRect(c)
-            # Add safe margin
             pad = 6
-            x0 = max(0, x - pad)
-            y0 = max(0, y - pad)
-            x1 = min(img_gray.shape[1], x + w + pad)
-            y1 = min(img_gray.shape[0], y + h + pad)
+            x0, y0 = max(0, x - pad), max(0, y - pad)
+            x1, y1 = min(img_gray.shape[1], x + w + pad), min(img_gray.shape[0], y + h + pad)
             return pil_img.crop((x0, y0, x1, y1))
     return pil_img
 
 def preprocess_mri(pil_img, apply_crop=True, apply_robust_norm=True):
-    """Adapts arbitrary web/OOD images to training distribution."""
     if apply_crop:
         pil_img = auto_crop_brain(pil_img)
-        
     pil_img = ImageOps.exif_transpose(pil_img).convert("RGB")
     rgb = np.asarray(pil_img, dtype=np.uint8)
     resized = cv2.resize(rgb, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
-    
     img_float = resized.astype(np.float32) / 255.0
-    
     if apply_robust_norm:
-        # Intensity stretching inside tissue region to resist scanner shift
         gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
         mask_tissue = gray > 20
         if np.sum(mask_tissue) > 100:
             p2 = np.percentile(img_float[mask_tissue], 1)
             p98 = np.percentile(img_float[mask_tissue], 99)
             img_float = np.clip((img_float - p2) / (p98 - p2 + 1e-8), 0, 1)
-            
     norm_tensor = ((img_float - DEFAULT_MEAN) / DEFAULT_STD).transpose(2, 0, 1)[None].astype(np.float32)
     return resized, norm_tensor
 
@@ -241,39 +229,25 @@ st.markdown("""
 # ----------------- SIDEBAR CONTROLS -----------------
 with st.sidebar:
     st.subheader("Diagnostic Controls")
-    
     sample_files = []
     if SAMPLES_DIR.exists():
         sample_files = sorted(list(SAMPLES_DIR.glob("*.jpg")) + list(SAMPLES_DIR.glob("*.png")) + list(SAMPLES_DIR.glob("*.jpeg")))
         
     choice = st.selectbox("Select Patient Scan:", ["Upload Custom Brain MRI"] + [f.name for f in sample_files])
-    # app.py er line ~250 te:
-if has_conflict:
-    st.markdown(f"""
-    <div class="warning-card">
-        <h4 style="margin: 0; color: #fbbf24;">⚠️ Multi-Task Head Discrepancy Resolved (Domain Shift Guardrail)</h4>
-        <div style="font-size: 13.5px; color: #cbd5e1; margin-top: 6px;">
-            The global classifier predicted <b>No_tumor ({raw_conf*100:.1f}%)</b> due to background/watermark artifacts. 
-            However, the segmentation head extracted a validated tumor mass covering <b>{tumor_area_pct:.2f}%</b> of the brain tissue.<br>
-            <b>Clinical Arbitration:</b> Lesion presence verified. Differential diagnosis indicates <b>{tumor_type_override} ({override_conf*100:.1f}% relative confidence)</b>.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    
     uploaded_file = None
     if choice == "Upload Custom Brain MRI":
         uploaded_file = st.file_uploader("Upload Image (JPG / PNG):", type=["jpg", "png", "jpeg"])
         
     st.markdown("---")
     st.markdown("### 🛠️ OOD Calibration Options")
-    enable_crop = st.checkbox("Auto-Crop Brain Contour", value=True, help="Removes outer black border, text labels, and watermarks.")
-    enable_robust_norm = st.checkbox("Adaptive Intensity Alignment", value=True, help="Normalizes contrast shifts across different scanners.")
-    
+    enable_crop = st.checkbox("Auto-Crop Brain Contour", value=True)
+    enable_robust_norm = st.checkbox("Adaptive Intensity Alignment", value=True)
     seg_threshold = st.slider("Tumor Segmentation Threshold", 0.10, 0.90, 0.50, 0.05)
-    
     st.markdown("---")
     st.caption("Khwaja Yunus Ali University • CSE Thesis Prototype")
 
-# ----------------- IMAGE LOADING -----------------
+# ----------------- IMAGE VERIFICATION GUARD -----------------
 pil_raw = None
 if choice != "Upload Custom Brain MRI":
     sample_path = SAMPLES_DIR / choice
@@ -282,11 +256,18 @@ if choice != "Upload Custom Brain MRI":
 elif uploaded_file is not None:
     pil_raw = Image.open(uploaded_file)
 
+# Safe Halt: Stop script execution cleanly if no image is present
 if pil_raw is None:
-    st.info("👈 Please select a benchmark test scan from the sidebar or upload a Brain MRI image.")
+    st.info("👈 Please select a benchmark test scan from the sidebar or upload a Brain MRI image to begin diagnosis.")
     st.stop()
 
 # ----------------- INFERENCE PIPELINE -----------------
+# Default fallbacks to prevent NameError
+has_conflict = False
+tumor_type_override = None
+override_conf = 0.0
+best_tumor_idx = 0
+
 disp_img, input_tensor = preprocess_mri(pil_raw, apply_crop=enable_crop, apply_robust_norm=enable_robust_norm)
 
 try:
@@ -311,16 +292,13 @@ try:
     tumor_area_pct = float(mask.mean()) * 100.0
     
     # Dual-Head Conflict Check
-    significant_lesion_detected = tumor_area_pct >= 0.40  # Lesion with significant pixel mass
+    significant_lesion_detected = tumor_area_pct >= 0.40
     has_conflict = (raw_pred_class.lower() == "no_tumor") and significant_lesion_detected
     
-    # If heads conflict, isolate non-tumor classes to find the lesion identity
     final_pred_class = raw_pred_class
     final_conf = raw_conf
-    tumor_type_override = None
     
     if has_conflict:
-        # Re-normalize over tumor classes only (Glioma, Meningioma, Pituitary)
         tumor_indices = [i for i, c in enumerate(CLASSES) if c.lower() != "no_tumor"]
         tumor_probs = probs[tumor_indices]
         if tumor_probs.sum() > 0:
@@ -334,7 +312,6 @@ try:
     attr_map = None
     if attr_name in out_map:
         attr_raw = np.squeeze(out_map[attr_name])
-        # Choose class to attribute: if conflict, attribute the detected tumor class
         target_attr_idx = best_tumor_idx if has_conflict else (raw_pred_idx if raw_pred_class.lower() != "no_tumor" else int(np.argmax(probs[:3])))
         if attr_raw.ndim == 3 and target_attr_idx < attr_raw.shape[0]:
             attr_slice = np.maximum(attr_raw[target_attr_idx], 0)
@@ -355,8 +332,8 @@ if has_conflict:
     <div class="warning-card">
         <h4 style="margin: 0; color: #fbbf24;">⚠️ Multi-Task Head Discrepancy Resolved (Domain Shift Guardrail)</h4>
         <div style="font-size: 13.5px; color: #cbd5e1; margin-top: 6px;">
-            The global classifier predicted <b>No_tumor ({raw_conf*100:.1f}%)</b> due to background/watermark artifacts[cite: 9, 11]. 
-            However, the segmentation head extracted a validated tumor mass covering <b>{tumor_area_pct:.2f}%</b> of the brain tissue[cite: 10, 11].<br>
+            The global classifier predicted <b>No_tumor ({raw_conf*100:.1f}%)</b> due to background/watermark artifacts. 
+            However, the segmentation head extracted a validated tumor mass covering <b>{tumor_area_pct:.2f}%</b> of the brain tissue.<br>
             <b>Clinical Arbitration:</b> Lesion presence verified. Differential diagnosis indicates <b>{tumor_type_override} ({override_conf*100:.1f}% relative confidence)</b>.
         </div>
     </div>
@@ -416,7 +393,7 @@ else:
     axes[1].set_title("No Lesion Boundary Detected", color="#10b981", fontsize=11, fontweight="bold", pad=8)
 axes[1].axis("off")
 
-# Panel 3: Attribution Heatmap Focused on Lesion
+# Panel 3: Saliency Map
 if attr_map is not None:
     axes[2].imshow(disp_img)
     axes[2].imshow(attr_map, cmap="jet", alpha=0.45, vmin=0, vmax=1)
