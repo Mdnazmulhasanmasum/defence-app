@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "name": "TinyBrainNet-MT",
+  "version": "1.0.0",
+  "variant": "unified",
+  "dummy": false,
+  "onnx_file": "tinybrainnet.onnx",
+  "created_utc": "2026-10-31T21:43:18.645307Z",
+  "input": {
+    "name": "input",
+    "size": 224,
+    "mean": [
+      0.17246411740779877,
+      0.17246411740779877,
+      0.17246411740779877
+    ],
+    "std": [
+      0.18363456428050995,
+      0.18363456428050995,
+      0.18363456428050995
+    ],
+    "layout": "NCHW",
+    "resize": "area (cv2.INTER_AREA)",
+    "colour": "RGB"
+  },
+  "outputs": {
+    "cls": "cls_logits",
+    "seg": "seg_logits",
+    "cam": "cam"
+  },
+  "classes": [
+    "Glioma",
+    "Meningioma",
+    "Pituitary",
+    "No_tumor"
+  ],
+  "calibration": {
+    "temperature": 0.6925502363149402,
+    "fit_on": "validation split (15% of train, seed 42)"
+  },
+  "triage": {
+    "auto": 0.62,
+    "review": 0.5
+  },
+  "segmentation": {
+    "threshold": 0.5,
+    "min_area_px": 20
+  },
+  "metrics": {
+    "test_accuracy": 0.974,
+    "test_dice": 0.8090749201382197,
+    "measured_with": "ONNX Runtime + the app's own pre-processing, official BRISC2025 test split",
+    "notebook_unified_vs_separate": {
+      "tinyunet_init": "tinyunet_v6_pre",
+      "unified": {
+        "test_acc": 0.974,
+        "test_macro_f1": 0.9743322224829988,
+        "test_dice_mean": 0.8348348736763,
+        "test_dice_median": 0.9104371070861816
+      },
+      "separate_models": {
+        "test_acc": 0.982,
+        "test_macro_f1": 0.9824669337578625,
+        "test_dice_mean": 0.8429663181304932,
+        "test_dice_median": 0.911028265953064
+      },
+      "dice_diff_ci95": [
+        -0.013242903165519238,
+        -0.003198005724698305
+      ],
+      "gate": {
+        "acc_drop_pp": 0.8000000000000007,
+        "dice_drop": 0.008131444454193115,
+        "max_acc_drop_pp": 1.0,
+        "max_dice_drop": 0.02,
+        "passed": true
+      },
+      "params_M_unified": 0.500245,
+      "params_M_two_separate": 0.952993,
+      "param_saving_pct": 47.50800897803027
+    }
+  },
+  "model_info": {
+    "params_m": 0.500245,
+    "onnx_mb": 2.024764,
+    "onnx_cpu_ms_1thread": 16.177497998796753
+  },
+  "verification": {
+    "paired": {
+      "logit_max_abs_diff": 3.9577484130859375e-05,
+      "cam_max_abs_diff": 0.0002696514129638672,
+      "argmax_agreement": 1.0,
+      "mask_iou": 1.0,
+      "ok": true
+    },
+    "unified": {
+      "logit_max_abs_diff": 4.5359134674072266e-05,
+      "cam_max_abs_diff": 0.0002497434616088867,
+      "argmax_agreement": 1.0,
+      "mask_iou": 1.0,
+      "ok": true
+    }
+  },
+  "dataset": "BRISC 2025 (train split)",
+  "license": "research / education only - not a medical device"
+}
