@@ -1,3 +1,4 @@
+
 import io, json, hashlib, traceback
 from pathlib import Path
 import numpy as np
@@ -133,11 +134,10 @@ meta = read_meta(META_PATH)
 @st.cache_resource
 def load_onnx_model(model_path_str):
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 2
+    opts.intra_op_num_threads = 1  # 2 theke 1 korun
     opts.inter_op_num_threads = 1
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     return ort.InferenceSession(model_path_str, sess_options=opts, providers=["CPUExecutionProvider"])
-
 if not MODEL_PATH.exists():
     st.error(f"❌ Model file not found. Checked: {[str(p) for p in MODEL_PATHS]}")
     st.stop()
