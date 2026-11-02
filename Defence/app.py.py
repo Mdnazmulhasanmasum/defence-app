@@ -80,13 +80,11 @@ if MODEL_PATH is None:
     st.error("Model file not found. Put `tinybrainnet.onnx` inside a `model/` folder next to app.py.")
     st.stop()
 
-
 def read_meta(p):
     try:
         return json.loads(p.read_text(encoding="utf-8")) if p else {}
     except Exception:
         return {}
-
 
 @st.cache_resource(show_spinner="Loading model…")
 def load_session(path):
@@ -95,7 +93,6 @@ def load_session(path):
     o.inter_op_num_threads = 1
     o.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     return ort.InferenceSession(path, sess_options=o, providers=["CPUExecutionProvider"])
-
 
 meta = read_meta(META_PATH)
 sess = load_session(str(MODEL_PATH))
@@ -128,13 +125,11 @@ def auto_crop(pil):
             return pil.crop((max(0, x - p), max(0, y - p), min(g.shape[1], x + w + p), min(g.shape[0], y + h + p)))
     return pil
 
-
 def base_rgb(pil, crop):
     pil = ImageOps.exif_transpose(pil).convert("RGB")
     if crop:
         pil = auto_crop(pil)
     return cv2.resize(np.asarray(pil, np.uint8), (IMG, IMG), interpolation=cv2.INTER_AREA)
-
 
 def to_tensor(rgb, robust):
     x = rgb.astype(np.float32) / 255.0
@@ -145,26 +140,20 @@ def to_tensor(rgb, robust):
             x = np.clip((x - lo) / (hi - lo + 1e-8), 0, 1)
     return ((x - MEAN) / STD).transpose(2, 0, 1)[None].astype(np.float32)
 
-
 def v_clahe(rgb):
     lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
     lab[..., 0] = cv2.createCLAHE(2.0, (8, 8)).apply(lab[..., 0])
     return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
-
 def v_clean(rgb):
-    """Median filter wipes thin watermark text / scratches but keeps the large structures."""
     return cv2.medianBlur(rgb, 5)
-
 
 def v_gamma(rgb, g):
     return (np.power(rgb.astype(np.float32) / 255.0, g) * 255).astype(np.uint8)
 
-
 def v_rot(rgb, deg):
     M = cv2.getRotationMatrix2D((IMG / 2, IMG / 2), deg, 1.0)
     return cv2.warpAffine(rgb, M, (IMG, IMG), flags=cv2.INTER_LINEAR, borderValue=(0, 0, 0))
-
 
 def v_zoom(rgb, f):
     if f > 1:
@@ -176,15 +165,12 @@ def v_zoom(rgb, f):
     out[o:o + s, o:o + s] = cv2.resize(rgb, (s, s), interpolation=cv2.INTER_AREA)
     return out
 
-
 def brain_mask(rgb):
-    """Soft mask of the head region, used to keep the attribution map off the background."""
     g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     m = (g > 20).astype(np.uint8)
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31)))
-    m = cv2.erode(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)))  # stay inside the skull ring
+    m = cv2.erode(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)))
     return cv2.GaussianBlur(m.astype(np.float32), (0, 0), 4)
-
 
 def run_once(t):
     res = sess.run(OUT_NAMES, {IN_NAME: t})
@@ -193,13 +179,8 @@ def run_once(t):
     attr = np.squeeze(res[2]).astype(np.float32) if len(res) > 2 else None
     return cls, seg, attr
 
-
 @st.cache_data(show_spinner="Analysing scan…", max_entries=24)
 def infer(img_bytes, crop, robust, multiview):
-    """Cached, so sliders and toggles that don't change the network input never re-run it.
-    Multi-view = 10 views: original, flip, CLAHE, watermark-clean, 2 gammas, 2 zooms, 2 rotations.
-    Segmentation is averaged over every view that keeps the geometry (orig, flip, CLAHE, clean, gammas).
-    Saliency is averaged over original+flip only."""
     rgb = base_rgb(Image.open(io.BytesIO(img_bytes)), crop)
     t0 = time.perf_counter()
     c0, s0, a0 = run_once(to_tensor(rgb, robust))
@@ -223,16 +204,13 @@ def infer(img_bytes, crop, robust, multiview):
     seg = np.mean(segs, axis=0) if segs else None
     return rgb, np.stack(logits), seg, attr, (time.perf_counter() - t0) * 1000
 
-
 def softmax(z, temp=1.0):
     z = np.asarray(z, np.float64).ravel() / temp
     e = np.exp(np.clip(z - z.max(), -60, 0))
     return e / e.sum()
 
-
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-np.clip(x, -35, 35)))
-
 
 def blend_mask(img, mask, alpha):
     out = img.copy()
@@ -241,18 +219,15 @@ def blend_mask(img, mask, alpha):
     cv2.drawContours(out, cnts, -1, (255, 80, 80), 1)
     return out
 
-
 def blend_heat(img, attr, alpha):
     heat = cv2.cvtColor(cv2.applyColorMap((attr * 255).astype(np.uint8), cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB)
-    w = (attr[..., None] * alpha)  # fade out where attribution is ~0 so the scan stays readable
+    w = (attr[..., None] * alpha)
     return (img * (1 - w) + heat * w).astype(np.uint8)
-
 
 def titled(img, text):
     bar = np.full((30, img.shape[1], 3), (11, 16, 32), np.uint8)
     cv2.putText(bar, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (230, 237, 243), 1, cv2.LINE_AA)
     return np.vstack([bar, img])
-
 
 def png_bytes(arr, size=None):
     if size:
@@ -261,11 +236,9 @@ def png_bytes(arr, size=None):
     Image.fromarray(arr).save(b, format="PNG")
     return b.getvalue()
 
-
 # ───────────────────────── PDF REPORT ─────────────────────────
 def latin(s):
     return esc((s or "").encode("latin-1", "replace").decode("latin-1"))
-
 
 def build_pdf(info, r, panels, captions):
     buf = io.BytesIO()
@@ -275,15 +248,21 @@ def build_pdf(info, r, panels, captions):
     W = A4[0] - 2 * L
     ink, mute, line, acc = (colors.HexColor(c) for c in ("#0f172a", "#64748b", "#e2e8f0", "#0d9488"))
     ss = getSampleStyleSheet()
-    S = lambda n, **k: ParagraphStyle(n, parent=ss["Normal"], textColor=ink, **k)
-    h1 = S("h1", fontName="Helvetica-Bold", fontSize=18, leading=22)
-    sub = S("sub", fontSize=9, leading=12, textColor=mute)
-    h2 = S("h2", fontName="Helvetica-Bold", fontSize=11, leading=14, spaceBefore=12, spaceAfter=5)
-    body = S("body", fontSize=9.5, leading=14)
-    lab = S("lab", fontSize=7.5, leading=10, textColor=mute)
-    val = S("val", fontName="Helvetica-Bold", fontSize=10, leading=13)
-    big = S("big", fontName="Helvetica-Bold", fontSize=15, leading=18)
-    cap = S("cap", fontSize=8, leading=10, textColor=mute, alignment=1)
+
+    # FIX: Dynamic Style Constructor to prevent duplicate keyword argument errors
+    def make_style(name, **kwargs):
+        st_args = {"parent": ss["Normal"], "textColor": ink}
+        st_args.update(kwargs)
+        return ParagraphStyle(name, **st_args)
+
+    h1 = make_style("h1", fontName="Helvetica-Bold", fontSize=18, leading=22)
+    sub = make_style("sub", fontSize=9, leading=12, textColor=mute)
+    h2 = make_style("h2", fontName="Helvetica-Bold", fontSize=11, leading=14, spaceBefore=12, spaceAfter=5)
+    body = make_style("body", fontSize=9.5, leading=14)
+    lab = make_style("lab", fontSize=7.5, leading=10, textColor=mute)
+    val = make_style("val", fontName="Helvetica-Bold", fontSize=10, leading=13)
+    big = make_style("big", fontName="Helvetica-Bold", fontSize=15, leading=18)
+    cap = make_style("cap", fontSize=8, leading=10, textColor=mute, alignment=1)
     P = Paragraph
 
     def bar(p, w=70 * mm, h=3.2 * mm, c=acc):
@@ -365,7 +344,6 @@ def build_pdf(info, r, panels, captions):
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()
 
-
 # ───────────────────────── SIDEBAR ─────────────────────────
 with st.sidebar:
     st.markdown("#### Settings")
@@ -375,8 +353,8 @@ with st.sidebar:
     crop = st.toggle("Auto-crop brain", True)
     robust = st.toggle("Intensity alignment", True)
     multiview = st.toggle("Multi-view check", True,
-                          help="Runs the scan 10 ways (original, flip, contrast, watermark-clean, 2 gammas, 2 zooms, "
-                               "2 rotations) and averages. Steadier on photos and web images that look unlike the training data.")
+                         help="Runs the scan 10 ways (original, flip, contrast, watermark-clean, 2 gammas, 2 zooms, "
+                              "2 rotations) and averages. Steadier on photos and web images that look unlike the training data.")
     soften = st.toggle("Soften probabilities", True,
                        help="Stops the model from showing 100% on scans it has never seen the like of.")
     seg_thr = st.slider("Segmentation threshold", 0.10, 0.90, 0.50, 0.05)
@@ -426,11 +404,9 @@ les_conf = float(sp[mask].mean()) if mask.any() else 0.0
 has_lesion = area >= MIN_LESION_PCT
 
 pred_is_clear = NO_TUMOR is not None and pred == NO_TUMOR
-conflict = pred_is_clear and has_lesion                     # classifier: no tumour / segmentation: mass
-empty_seg = (not pred_is_clear) and not has_lesion          # classifier: tumour / segmentation: nothing
+conflict = pred_is_clear and has_lesion
+empty_seg = (not pred_is_clear) and not has_lesion
 
-# Tumour type, ranked among tumour classes only. When the heads disagree the scan is probably out of
-# distribution, so the type is softened harder and shown as a suggestion rather than a verdict.
 T_type = max(T, 2.0) if conflict else T
 tp = softmax(mean_logits[TUMOR_IDX], T_type)
 order = np.argsort(-tp)
@@ -444,7 +420,6 @@ else:
     final_idx, final_conf = pred, conf
 final_name = CLASSES[final_idx]
 
-# Reliability
 heads_ok = not conflict and not empty_seg
 if conflict:
     level = "Low"
@@ -467,7 +442,6 @@ if not multiview:
     checks.append((False, "Multi-view check is off. Turn it on for a steadier result."))
 checks.append((True, f"Analysed in {ms:.0f} ms on CPU."))
 
-# Saliency for the reported class, kept inside the head region
 attr = None
 if attr_raw is not None and attr_raw.ndim == 3:
     a = cv2.resize(np.maximum(attr_raw[final_idx if final_idx < attr_raw.shape[0] else 0], 0), (IMG, IMG), interpolation=cv2.INTER_CUBIC)
