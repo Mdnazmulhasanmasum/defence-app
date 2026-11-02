@@ -1,433 +1,325 @@
-import io, json, hashlib, traceback
+import io, json, time, hashlib
 from pathlib import Path
-import numpy as np
+
 import cv2
-from PIL import Image, ImageOps
+import numpy as np
 import onnxruntime as ort
 import streamlit as st
-import matplotlib.pyplot as plt
+from PIL import Image, ImageOps
 
-# ----------------- PAGE CONFIG -----------------
-st.set_page_config(
-    page_title="TinyBrainNet-MT | Clinical AI Suite",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ───────────────────────── PAGE ─────────────────────────
+st.set_page_config(page_title="TinyBrainNet-MT", page_icon="🧠", layout="wide")
 
-# ----------------- MODERN DARK CLINICAL UI CSS -----------------
+# One accent, one surface colour, one radius. Everything else stays quiet.
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
-}
-.stApp {
-    background-color: #0b1020;
-    color: #e5e7eb;
-}
-section[data-testid="stSidebar"] {
-    background-color: #10182b;
-    border-right: 1px solid #1e293b;
-}
-.hero-box {
-    background: linear-gradient(130deg, #14233c 0%, #0d1527 100%);
-    border: 1px solid #29415f;
-    border-radius: 14px;
-    padding: 22px 26px;
-    margin-bottom: 20px;
-    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
-}
-.hero-title {
-    font-size: 26px;
-    font-weight: 800;
-    background: linear-gradient(90deg, #38bdf8, #818cf8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 6px;
-}
-.badge {
-    background: rgba(30, 41, 59, 0.8);
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    color: #38bdf8;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 16px;
-    display: inline-block;
-    margin-right: 6px;
-    margin-top: 6px;
-}
-.metric-card {
-    background: #111c30;
-    border: 1px solid #27364d;
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 12px;
-}
-.metric-label {
-    color: #94a3b8;
-    font-size: 11px;
-    text-transform: uppercase;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-}
-.metric-val {
-    color: #f8fafc;
-    font-size: 24px;
-    font-weight: 800;
-    margin-top: 4px;
-}
-.alert-card {
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid #ef4444;
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 14px;
-}
-.warning-card {
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid #f59e0b;
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 14px;
-}
-.success-card {
-    background: rgba(16, 185, 129, 0.12);
-    border: 1px solid #10b981;
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 14px;
-}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root{--bg:#0d1117;--surface:#151b23;--line:#222b36;--text:#e6edf3;--mute:#8b98a7;
+      --accent:#5eead4;--warn:#fbbf24;--bad:#f87171;--ok:#4ade80;--r:12px}
+html,body,[class*="css"],.stApp{font-family:'Inter',sans-serif}
+.stApp{background:var(--bg);color:var(--text)}
+header[data-testid="stHeader"]{background:transparent}
+footer,#MainMenu{visibility:hidden}
+.block-container{max-width:1180px;padding-top:2.2rem;padding-bottom:4rem}
+section[data-testid="stSidebar"]{background:var(--surface);border-right:1px solid var(--line)}
+
+h1.t{font-size:1.7rem;font-weight:700;letter-spacing:-.02em;margin:0}
+p.s{color:var(--mute);font-size:.92rem;margin:.25rem 0 1.4rem}
+
+/* upload zone */
+[data-testid="stFileUploaderDropzone"]{background:var(--surface);border:1.5px dashed #2f3b4a;
+  border-radius:var(--r);padding:2.2rem 1rem;transition:border-color .2s,background .2s}
+[data-testid="stFileUploaderDropzone"]:hover{border-color:var(--accent);background:#17212b}
+[data-testid="stFileUploaderDropzone"] button{background:var(--accent);color:#04201c;border:0;
+  border-radius:8px;font-weight:600;padding:.5rem 1.1rem}
+[data-testid="stFileUploaderDropzone"] small,[data-testid="stFileUploaderDropzone"] span{color:var(--mute)}
+
+/* result pieces */
+.banner{border-radius:var(--r);padding:14px 18px;margin:1.1rem 0;border:1px solid var(--line);
+  border-left:4px solid var(--c);background:var(--surface)}
+.banner b{color:var(--c)}
+.banner div{color:var(--mute);font-size:.9rem;margin-top:3px;line-height:1.5}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.kpi .l{color:var(--mute);font-size:.78rem}
+.kpi .v{font-size:1.5rem;font-weight:700;margin-top:2px;letter-spacing:-.01em}
+.bar{margin:0 0 12px}
+.bar .row{display:flex;justify-content:space-between;font-size:.88rem;margin-bottom:5px}
+.bar .row span:last-child{color:var(--mute);font-variant-numeric:tabular-nums}
+.bar .track{height:6px;background:var(--line);border-radius:99px;overflow:hidden}
+.bar .fill{height:100%;border-radius:99px;background:#3b4756}
+.bar.top .fill{background:var(--accent)}
+.note{color:var(--mute);font-size:.78rem;margin-top:2.2rem;line-height:1.6}
+button[data-baseweb="tab"]{font-weight:500}
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- PATHS & MODEL INITIALIZATION -----------------
+# ───────────────────────── MODEL ─────────────────────────
 BASE = Path(__file__).resolve().parent
-MODEL_PATHS = [
-    BASE / "model" / "tinybrainnet.onnx",
-    BASE / "tinybrainnet.onnx",
-    BASE / "model" / "uninet.onnx",
-    BASE.parent / "model" / "tinybrainnet.onnx"
-]
-META_PATHS = [
-    BASE / "model" / "meta.json",
-    BASE / "meta.json",
-    BASE.parent / "model" / "meta.json"
-]
+MODEL_PATHS = [BASE / "model" / "tinybrainnet.onnx", BASE / "tinybrainnet.onnx",
+               BASE / "model" / "uninet.onnx", BASE.parent / "model" / "tinybrainnet.onnx"]
+META_PATHS = [BASE / "model" / "meta.json", BASE / "meta.json", BASE.parent / "model" / "meta.json"]
 SAMPLES_DIR = BASE / "samples" if (BASE / "samples").exists() else BASE.parent / "samples"
 
-MODEL_PATH = next((p for p in MODEL_PATHS if p.exists()), MODEL_PATHS[0])
-META_PATH = next((p for p in META_PATHS if p.exists()), META_PATHS[0])
+MODEL_PATH = next((p for p in MODEL_PATHS if p.exists()), None)
+META_PATH = next((p for p in META_PATHS if p.exists()), None)
 
-def read_meta(path):
-    if not path.exists():
-        return {}
+if MODEL_PATH is None:
+    st.error("Model file not found. Put `tinybrainnet.onnx` inside a `model/` folder next to app.py.")
+    st.stop()
+
+
+def read_meta(p):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(p.read_text(encoding="utf-8")) if p else {}
     except Exception:
         return {}
 
+
+@st.cache_resource(show_spinner="Loading model…")
+def load_session(path):
+    o = ort.SessionOptions()
+    o.intra_op_num_threads = 1
+    o.inter_op_num_threads = 1
+    o.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return ort.InferenceSession(path, sess_options=o, providers=["CPUExecutionProvider"])
+
+
 meta = read_meta(META_PATH)
+sess = load_session(str(MODEL_PATH))
 
-# Optimized Single-Thread CPU Loader (CPU Throttling Prevention)
-@st.cache_resource
-def load_onnx_model(model_path_str):
-    opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1
-    opts.inter_op_num_threads = 1
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(model_path_str, sess_options=opts, providers=["CPUExecutionProvider"])
+CLASSES = [str(c) for c in meta.get("classes", ["Glioma", "Meningioma", "Pituitary", "No_tumor"])]
+NO_TUMOR = next((i for i, c in enumerate(CLASSES) if c.lower() == "no_tumor"), None)
+INP = meta.get("input", {})
+IMG = int(INP.get("size", 224))
+MEAN = np.array(INP.get("mean", [0.1838] * 3), np.float32)
+STD = np.array(INP.get("std", [0.1984] * 3), np.float32)
+TEMP = max(float(meta.get("calibration", {}).get("temperature", 0.693)), 1e-4)
+SEG_IS_PROB = bool(meta.get("outputs", {}).get("segmentation_is_probability", False))
 
-if not MODEL_PATH.exists():
-    st.error(f"❌ Model file not found. Checked: {[str(p) for p in MODEL_PATHS]}")
-    st.stop()
+IN_NAME = sess.get_inputs()[0].name
+OUT_NAMES = [o.name for o in sess.get_outputs()][:3]  # cls, seg, attribution (optional)
 
-try:
-    sess = load_onnx_model(str(MODEL_PATH))
-except Exception as e:
-    st.error(f"Failed to load ONNX runtime: {e}")
-    st.stop()
-
-# Meta configuration
-CLASSES = meta.get("classes", ["Glioma", "Meningioma", "Pituitary", "No_tumor"])
-CLASSES = [str(x) for x in CLASSES]
-INP_CONFIG = meta.get("input", {})
-IMG_SIZE = int(INP_CONFIG.get("size", 224))
-DEFAULT_MEAN = np.array(INP_CONFIG.get("mean", [0.1838, 0.1838, 0.1838]), dtype=np.float32)
-DEFAULT_STD = np.array(INP_CONFIG.get("std", [0.1984, 0.1984, 0.1984]), dtype=np.float32)
-TEMPERATURE = max(float(meta.get("calibration", {}).get("temperature", 0.693)), 1e-4)
-
-# ONNX IO mapping
-ins = sess.get_inputs()
-outs = sess.get_outputs()
-inp_name = ins[0].name
-out_names = [o.name for o in outs]
-
-cls_name = out_names[0]
-seg_name = out_names[1] if len(out_names) > 1 else None
-attr_name = out_names[2] if len(out_names) > 2 else None
-
-# ----------------- PREPROCESSING FUNCTIONS -----------------
-def auto_crop_brain(pil_img):
-    img_gray = np.array(pil_img.convert("L"))
-    _, thresh = cv2.threshold(img_gray, 22, 255, cv2.THRESH_BINARY)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours:
-        c = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(c) > (img_gray.shape[0] * img_gray.shape[1] * 0.10):
+# ───────────────────────── PIPELINE ─────────────────────────
+def auto_crop(pil):
+    g = np.array(pil.convert("L"))
+    _, th = cv2.threshold(g, 22, 255, cv2.THRESH_BINARY)
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cnts:
+        c = max(cnts, key=cv2.contourArea)
+        if cv2.contourArea(c) > g.size * 0.10:
             x, y, w, h = cv2.boundingRect(c)
-            pad = 6
-            x0, y0 = max(0, x - pad), max(0, y - pad)
-            x1, y1 = min(img_gray.shape[1], x + w + pad), min(img_gray.shape[0], y + h + pad)
-            return pil_img.crop((x0, y0, x1, y1))
-    return pil_img
+            p = 6
+            return pil.crop((max(0, x - p), max(0, y - p), min(g.shape[1], x + w + p), min(g.shape[0], y + h + p)))
+    return pil
 
-def preprocess_mri(pil_img, apply_crop=True, apply_robust_norm=True):
-    if apply_crop:
-        pil_img = auto_crop_brain(pil_img)
-    pil_img = ImageOps.exif_transpose(pil_img).convert("RGB")
-    rgb = np.asarray(pil_img, dtype=np.uint8)
-    resized = cv2.resize(rgb, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
-    img_float = resized.astype(np.float32) / 255.0
-    if apply_robust_norm:
-        gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
-        mask_tissue = gray > 20
-        if np.sum(mask_tissue) > 100:
-            p2 = np.percentile(img_float[mask_tissue], 1)
-            p98 = np.percentile(img_float[mask_tissue], 99)
-            img_float = np.clip((img_float - p2) / (p98 - p2 + 1e-8), 0, 1)
-    norm_tensor = ((img_float - DEFAULT_MEAN) / DEFAULT_STD).transpose(2, 0, 1)[None].astype(np.float32)
-    return resized, norm_tensor
 
-def softmax(logits, temp=1.0):
-    z = np.asarray(logits, dtype=np.float64).flatten() / temp
-    z -= np.max(z)
-    ez = np.exp(np.clip(z, -60, 60))
-    return (ez / np.sum(ez)).astype(np.float32)
+def preprocess(pil, crop, robust):
+    pil = ImageOps.exif_transpose(pil).convert("RGB")  # fix rotation first, then crop
+    if crop:
+        pil = auto_crop(pil)
+    rgb = cv2.resize(np.asarray(pil, np.uint8), (IMG, IMG), interpolation=cv2.INTER_AREA)
+    x = rgb.astype(np.float32) / 255.0
+    if robust:
+        tissue = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY) > 20
+        if tissue.sum() > 100:
+            lo, hi = np.percentile(x[tissue], [1, 99])
+            x = np.clip((x - lo) / (hi - lo + 1e-8), 0, 1)
+    t = ((x - MEAN) / STD).transpose(2, 0, 1)[None].astype(np.float32)
+    return rgb, t
+
+
+def run_once(t):
+    res = sess.run(OUT_NAMES, {IN_NAME: t})
+    cls = np.squeeze(res[0]).astype(np.float64)
+    seg = np.squeeze(res[1]).astype(np.float32) if len(res) > 1 else None
+    attr = np.squeeze(res[2]).astype(np.float32) if len(res) > 2 else None
+    return cls, seg, attr
+
+
+@st.cache_data(show_spinner="Analysing scan…", max_entries=24)
+def infer(img_bytes, crop, robust, tta):
+    """Cached: moving sliders / switching tabs never re-runs the network."""
+    disp, t = preprocess(Image.open(io.BytesIO(img_bytes)), crop, robust)
+    t0 = time.perf_counter()
+    cls, seg, attr = run_once(t)
+    if tta:  # horizontal-flip test-time augmentation
+        c2, s2, a2 = run_once(np.ascontiguousarray(t[..., ::-1]))
+        cls = (cls + c2) / 2
+        if seg is not None:
+            seg = (seg + s2[..., ::-1]) / 2
+        if attr is not None:
+            attr = (attr + a2[..., ::-1]) / 2
+    return disp, cls, seg, attr, (time.perf_counter() - t0) * 1000
+
+
+def softmax(z, temp=1.0):
+    z = np.asarray(z, np.float64).ravel() / temp
+    e = np.exp(np.clip(z - z.max(), -60, 0))
+    return e / e.sum()
+
 
 def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-np.clip(x, -35.0, 35.0)))
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -35, 35)))
 
-# ----------------- HEADER & HERO BANNER -----------------
-st.markdown("""
-<div class="hero-box">
-    <div class="hero-title">🧠 TinyBrainNet-MT: Unified Brain MRI Suite</div>
-    <div style="color: #94a3b8; font-size: 13.5px;">Multi-Task Edge Architecture with Dual-Head Discrepancy Arbitration & Saliency Grounding</div>
-    <div>
-        <span class="badge">Architecture: UNI-NET (&lt;0.5M Params)</span>
-        <span class="badge">Engine: ONNX Runtime CPU</span>
-        <span class="badge">In-Domain Accuracy: ~98.4%</span>
-        <span class="badge">Mean Dice: 0.823</span>
-        <span class="badge">Dual-Head Guardrail: Active</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
-# ----------------- SIDEBAR CONTROLS -----------------
+def blend_mask(img, mask, alpha):
+    out = img.copy()
+    out[mask] = (out[mask] * (1 - alpha) + np.array([248, 113, 113]) * alpha).astype(np.uint8)
+    cnts, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    cv2.drawContours(out, cnts, -1, (255, 255, 255), 1)
+    return out
+
+
+def blend_heat(img, attr, alpha):
+    heat = cv2.cvtColor(cv2.applyColorMap((attr * 255).astype(np.uint8), cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
+    return (img * (1 - alpha) + heat * alpha).astype(np.uint8)
+
+
+def label(img, text):
+    out = img.copy()
+    cv2.putText(out, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    return out
+
+
+# ───────────────────────── SIDEBAR ─────────────────────────
 with st.sidebar:
-    st.subheader("Diagnostic Controls")
-    sample_files = []
-    if SAMPLES_DIR.exists():
-        sample_files = sorted(list(SAMPLES_DIR.glob("*.jpg")) + list(SAMPLES_DIR.glob("*.png")) + list(SAMPLES_DIR.glob("*.jpeg")))
-        
-    choice = st.selectbox("Select Patient Scan:", ["Upload Custom Brain MRI"] + [f.name for f in sample_files])
-    
-    uploaded_file = None
-    if choice == "Upload Custom Brain MRI":
-        uploaded_file = st.file_uploader("Upload Image (JPG / PNG):", type=["jpg", "png", "jpeg"])
-        
-    st.markdown("---")
-    st.markdown("### 🛠️ OOD Calibration Options")
-    enable_crop = st.checkbox("Auto-Crop Brain Contour", value=True)
-    enable_robust_norm = st.checkbox("Adaptive Intensity Alignment", value=True)
-    seg_threshold = st.slider("Tumor Segmentation Threshold", 0.10, 0.90, 0.50, 0.05)
-    st.markdown("---")
-    st.caption("Khwaja Yunus Ali University • CSE Thesis Prototype")
+    st.markdown("#### Settings")
+    samples = sorted(p for ext in ("*.jpg", "*.jpeg", "*.png") for p in SAMPLES_DIR.glob(ext)) if SAMPLES_DIR.exists() else []
+    sample_choice = st.selectbox("Try a sample", ["None"] + [p.name for p in samples])
+    st.divider()
+    crop = st.toggle("Auto-crop brain", True)
+    robust = st.toggle("Intensity alignment", True)
+    tta = st.toggle("Flip averaging (slower, steadier)", False)
+    seg_thr = st.slider("Segmentation threshold", 0.10, 0.90, 0.50, 0.05)
+    alpha = st.slider("Overlay strength", 0.1, 0.9, 0.5, 0.05)
+    st.divider()
+    st.caption("Khwaja Yunus Ali University · CSE thesis prototype")
 
-# ----------------- IMAGE VERIFICATION GUARD -----------------
-pil_raw = None
-if choice != "Upload Custom Brain MRI":
-    sample_path = SAMPLES_DIR / choice
-    if sample_path.exists():
-        pil_raw = Image.open(sample_path)
-elif uploaded_file is not None:
-    pil_raw = Image.open(uploaded_file)
+# ───────────────────────── HEADER + UPLOAD ─────────────────────────
+st.markdown('<h1 class="t">🧠 TinyBrainNet-MT</h1>'
+            '<p class="s">Upload a brain MRI slice to classify the tumour type and outline the lesion.</p>',
+            unsafe_allow_html=True)
 
-# Safe Halt: Stop script execution cleanly if no image is present
-if pil_raw is None:
-    st.info("👈 Please select a benchmark test scan from the sidebar or upload a Brain MRI image to begin diagnosis.")
+upload = st.file_uploader("Upload MRI", type=["jpg", "jpeg", "png"], label_visibility="collapsed",
+                          help="JPG or PNG, single axial / coronal / sagittal slice")
+
+img_bytes = None
+if upload is not None:
+    img_bytes = upload.getvalue()
+elif sample_choice != "None":
+    img_bytes = (SAMPLES_DIR / sample_choice).read_bytes()
+
+if img_bytes is None:
+    st.caption("Drag and drop a scan above, or pick a sample from the sidebar.")
     st.stop()
 
-# ----------------- INFERENCE PIPELINE -----------------
-# Default fallbacks to prevent NameError
-has_conflict = False
-tumor_type_override = None
-override_conf = 0.0
-best_tumor_idx = 0
-
-disp_img, input_tensor = preprocess_mri(pil_raw, apply_crop=enable_crop, apply_robust_norm=enable_robust_norm)
-
+# ───────────────────────── INFERENCE ─────────────────────────
 try:
-    req_outputs = [cls_name, seg_name]
-    if attr_name:
-        req_outputs.append(attr_name)
-    raw_res = sess.run(req_outputs, {inp_name: input_tensor})
-    out_map = dict(zip(req_outputs, raw_res))
-    
-    # Classification processing
-    cls_logits = np.squeeze(out_map[cls_name])
-    probs = softmax(cls_logits, TEMPERATURE)
-    raw_pred_idx = int(np.argmax(probs))
-    raw_pred_class = CLASSES[raw_pred_idx]
-    raw_conf = float(probs[raw_pred_idx])
-    
-    # Segmentation processing
-    seg_raw = np.squeeze(out_map[seg_name])
-    seg_prob = sigmoid(seg_raw) if not bool(meta.get("outputs", {}).get("segmentation_is_probability", False)) else seg_raw
-    seg_prob = cv2.resize(seg_prob.astype(np.float32), (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-    mask = seg_prob >= seg_threshold
-    tumor_area_pct = float(mask.mean()) * 100.0
-    
-    # Dual-Head Conflict Check
-    significant_lesion_detected = tumor_area_pct >= 0.40
-    has_conflict = (raw_pred_class.lower() == "no_tumor") and significant_lesion_detected
-    
-    final_pred_class = raw_pred_class
-    final_conf = raw_conf
-    
-    if has_conflict:
-        tumor_indices = [i for i, c in enumerate(CLASSES) if c.lower() != "no_tumor"]
-        tumor_probs = probs[tumor_indices]
-        if tumor_probs.sum() > 0:
-            re_norm = tumor_probs / tumor_probs.sum()
-            best_tumor_subidx = int(np.argmax(re_norm))
-            best_tumor_idx = tumor_indices[best_tumor_subidx]
-            tumor_type_override = CLASSES[best_tumor_idx]
-            override_conf = float(re_norm[best_tumor_subidx])
-            
-    # Attribution extraction
-    attr_map = None
-    if attr_name in out_map:
-        attr_raw = np.squeeze(out_map[attr_name])
-        target_attr_idx = best_tumor_idx if has_conflict else (raw_pred_idx if raw_pred_class.lower() != "no_tumor" else int(np.argmax(probs[:3])))
-        if attr_raw.ndim == 3 and target_attr_idx < attr_raw.shape[0]:
-            attr_slice = np.maximum(attr_raw[target_attr_idx], 0)
-            attr_slice = cv2.resize(attr_slice.astype(np.float32), (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_CUBIC)
-            lo, hi = float(np.percentile(attr_slice, 1)), float(np.percentile(attr_slice, 99.5))
-            if hi > lo + 1e-7:
-                attr_map = np.clip((attr_slice - lo) / (hi - lo), 0, 1)
-
+    disp, cls_logits, seg_raw, attr_raw, ms = infer(img_bytes, crop, robust, tta)
 except Exception as e:
-    st.error(f"Inference Failure: {e}")
-    with st.expander("Technical Traceback"):
-        st.code(traceback.format_exc())
+    st.error(f"Could not analyse this image: {e}")
     st.stop()
 
-# ----------------- CLINICAL ARBITRATION DISPLAY -----------------
-if has_conflict:
-    st.markdown(f"""
-    <div class="warning-card">
-        <h4 style="margin: 0; color: #fbbf24;">⚠️ Multi-Task Head Discrepancy Resolved (Domain Shift Guardrail)</h4>
-        <div style="font-size: 13.5px; color: #cbd5e1; margin-top: 6px;">
-            The global classifier predicted <b>No_tumor ({raw_conf*100:.1f}%)</b> due to background/watermark artifacts. 
-            However, the segmentation head extracted a validated tumor mass covering <b>{tumor_area_pct:.2f}%</b> of the brain tissue.<br>
-            <b>Clinical Arbitration:</b> Lesion presence verified. Differential diagnosis indicates <b>{tumor_type_override} ({override_conf*100:.1f}% relative confidence)</b>.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+probs = softmax(cls_logits, TEMP)
+pred = int(probs.argmax())
+conf = float(probs[pred])
+entropy = float(-(probs * np.log(probs + 1e-12)).sum() / np.log(len(probs)))  # 0 = sure, 1 = unsure
+
+if seg_raw is not None:
+    sp = seg_raw if SEG_IS_PROB else sigmoid(seg_raw)
+    sp = cv2.resize(sp, (IMG, IMG), interpolation=cv2.INTER_LINEAR)
+    mask = sp >= seg_thr
 else:
-    status_cls = "success-card" if raw_conf >= 0.70 else "warning-card"
-    st.markdown(f"""
-    <div class="{status_cls}">
-        <h4 style="margin: 0; color: {'#34d399' if raw_conf>=0.70 else '#fbbf24'};">
-            {'✅ Consensus Diagnosis' if raw_conf>=0.70 else '⚠️ Low Confidence / Clinical Review Required'}
-        </h4>
-        <div style="font-size: 13.5px; color: #cbd5e1; margin-top: 4px;">
-            Predicted <b>{raw_pred_class}</b> with <b>{raw_conf*100:.2f}%</b> calibrated confidence.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    mask = np.zeros((IMG, IMG), bool)
+area = float(mask.mean()) * 100
 
-# ----------------- METRICS DASHBOARD -----------------
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    display_title = tumor_type_override if has_conflict else raw_pred_class
-    c1.markdown(f'<div class="metric-card"><div class="metric-label">Diagnosis</div><div class="metric-val" style="color:#38bdf8;">{display_title}</div></div>', unsafe_allow_html=True)
-with c2:
-    display_conf = override_conf if has_conflict else raw_conf
-    c2.markdown(f'<div class="metric-card"><div class="metric-label">Confidence</div><div class="metric-val">{display_conf*100:.1f}%</div></div>', unsafe_allow_html=True)
-with c3:
-    c3.markdown(f'<div class="metric-card"><div class="metric-label">Tumor Mass Area</div><div class="metric-val" style="color:{"#f87171" if tumor_area_pct>0 else "#94a3b8"}">{tumor_area_pct:.2f}%</div></div>', unsafe_allow_html=True)
-with c4:
-    head_agreement = "Discordant (Overridden)" if has_conflict else "Concordant"
-    color_ag = "#fbbf24" if has_conflict else "#34d399"
-    c4.markdown(f'<div class="metric-card"><div class="metric-label">Dual-Head Status</div><div class="metric-val" style="font-size:18px; color:{color_ag};">{head_agreement}</div></div>', unsafe_allow_html=True)
+# Disagreement between the two heads: classifier says "no tumour" but segmentation found a mass.
+conflict = NO_TUMOR is not None and pred == NO_TUMOR and area >= 0.40
+final_idx, final_conf = pred, conf
+if conflict:
+    idxs = [i for i in range(len(CLASSES)) if i != NO_TUMOR]
+    sub = probs[idxs] / probs[idxs].sum()
+    j = int(sub.argmax())
+    final_idx, final_conf = idxs[j], float(sub[j])
+final_name = CLASSES[final_idx]
 
-# ----------------- PROBABILITY DISTRIBUTION & LOCALIZATION -----------------
-col_chart, col_empty = st.columns([1, 1])
-with col_chart:
-    st.markdown("#### Differential Class Probabilities")
-    for c_name, p in sorted(zip(CLASSES, probs), key=lambda x: x[1], reverse=True):
-        st.progress(float(p), text=f"{c_name}: {p*100:.1f}%")
+# Saliency for the class that is actually reported
+attr = None
+if attr_raw is not None and attr_raw.ndim == 3:
+    k = final_idx if final_idx < attr_raw.shape[0] else 0
+    a = cv2.resize(np.maximum(attr_raw[k], 0), (IMG, IMG), interpolation=cv2.INTER_CUBIC)
+    lo, hi = np.percentile(a, [1, 99.5])
+    if hi > lo + 1e-7:
+        attr = np.clip((a - lo) / (hi - lo), 0, 1)
 
-st.markdown("### 🔬 Multi-Modal Diagnostic Inspection")
-n_panels = 3 if attr_map is not None else 2
-fig, axes = plt.subplots(1, n_panels, figsize=(4.8 * n_panels, 4.4), facecolor="#0b1020")
-axes = np.atleast_1d(axes)
-
-# Panel 1: Cleaned & Processed Input
-axes[0].imshow(disp_img)
-axes[0].set_title("Input (After Auto-Crop & Norm)", color="white", fontsize=11, fontweight="bold", pad=8)
-axes[0].axis("off")
-
-# Panel 2: Predicted Segmentation Mask
-axes[1].imshow(disp_img)
-if mask.any():
-    axes[1].imshow(np.ma.masked_where(~mask, mask), cmap="autumn", alpha=0.50)
-    axes[1].contour(mask.astype(np.uint8), levels=[0.5], colors="red", linewidths=1.5)
-    axes[1].set_title(f"Segmented Lesion ({tumor_area_pct:.2f}% area)", color="#ef4444", fontsize=11, fontweight="bold", pad=8)
+# ───────────────────────── RESULT ─────────────────────────
+if conflict:
+    color, title = "var(--warn)", "Heads disagree, please review"
+    body = (f"The classifier says <b style='color:var(--text)'>No_tumor ({conf*100:.1f}%)</b>, but the segmentation head "
+            f"outlined a mass covering <b style='color:var(--text)'>{area:.2f}%</b> of the slice. "
+            f"The most likely tumour type is <b style='color:var(--text)'>{final_name}</b> "
+            f"({final_conf*100:.1f}% among tumour classes).")
+elif conf >= 0.70:
+    color, title = ("var(--ok)", f"{final_name} detected") if final_name.lower() != "no_tumor" else ("var(--ok)", "No tumour detected")
+    body = f"Calibrated confidence {conf*100:.1f}%."
 else:
-    axes[1].set_title("No Lesion Boundary Detected", color="#10b981", fontsize=11, fontweight="bold", pad=8)
-axes[1].axis("off")
+    color, title = "var(--warn)", "Low confidence"
+    body = f"Best guess is {final_name} at {conf*100:.1f}%. Treat this result with caution."
 
-# Panel 3: Saliency Map
-if attr_map is not None:
-    axes[2].imshow(disp_img)
-    axes[2].imshow(attr_map, cmap="jet", alpha=0.45, vmin=0, vmax=1)
-    if mask.any():
-        axes[2].contour(mask.astype(np.uint8), levels=[0.5], colors="white", linewidths=1.2)
-    attr_target = tumor_type_override if has_conflict else raw_pred_class
-    axes[2].set_title(f"Saliency Map ({attr_target})", color="#38bdf8", fontsize=11, fontweight="bold", pad=8)
-    axes[2].axis("off")
+st.markdown(f'<div class="banner" style="--c:{color}"><b>{title}</b><div>{body}</div></div>', unsafe_allow_html=True)
 
-plt.tight_layout()
-st.pyplot(fig, use_container_width=True)
+k1, k2, k3, k4 = st.columns(4)
+for col, lab, val in [(k1, "Diagnosis", final_name), (k2, "Confidence", f"{final_conf*100:.1f}%"),
+                      (k3, "Lesion area", f"{area:.2f}%"), (k4, "Uncertainty", f"{entropy*100:.0f}%")]:
+    col.markdown(f'<div class="kpi"><div class="l">{lab}</div><div class="v">{val}</div></div>', unsafe_allow_html=True)
 
-# Export options
-def get_fig_png(fig_obj):
-    buf = io.BytesIO()
-    fig_obj.savefig(buf, format="png", dpi=180, bbox_inches="tight", facecolor=fig_obj.get_facecolor())
-    buf.seek(0)
-    return buf.getvalue()
+st.write("")
+left, right = st.columns([3, 2], gap="large")
 
-png_data = get_fig_png(fig)
-plt.close(fig)
+overlay = blend_mask(disp, mask, alpha) if mask.any() else disp
+heat = blend_heat(disp, attr, alpha) if attr is not None else None
+mask_img = (np.stack([mask] * 3, -1) * 255).astype(np.uint8)
 
-st.markdown("### 📥 Clinical Audit Export")
-ex1, ex2 = st.columns(2)
-report_payload = {
-    "system": "TinyBrainNet-MT Clinical Suite",
-    "final_diagnosis": display_title,
-    "confidence": display_conf,
-    "dual_head_status": head_agreement,
-    "lesion_area_percent": tumor_area_pct,
-    "raw_probabilities": {cn: float(p) for cn, p in zip(CLASSES, probs)},
-    "threshold_used": seg_threshold,
-    "auto_crop_enabled": enable_crop,
-    "discrepancy_overridden": bool(has_conflict)
+with left:
+    names = ["Segmentation", "Saliency", "Input"] if heat is not None else ["Segmentation", "Input"]
+    for tab, n in zip(st.tabs(names), names):
+        with tab:
+            st.image({"Segmentation": overlay, "Saliency": heat, "Input": disp}[n], use_container_width=True)
+    st.caption(f"{ms:.0f} ms on CPU{' · flip averaging on' if tta else ''}")
+
+with right:
+    st.markdown("**Class probabilities**")
+    html = ""
+    for i in np.argsort(-probs):
+        top = " top" if i == pred else ""
+        html += (f'<div class="bar{top}"><div class="row"><span>{CLASSES[i]}</span><span>{probs[i]*100:.1f}%</span></div>'
+                 f'<div class="track"><div class="fill" style="width:{probs[i]*100:.1f}%"></div></div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+
+# ───────────────────────── EXPORT ─────────────────────────
+panels = [label(disp, "Input"), label(overlay, f"Lesion {area:.2f}%")]
+if heat is not None:
+    panels.append(label(heat, "Saliency"))
+buf = io.BytesIO()
+Image.fromarray(np.hstack(panels)).save(buf, format="PNG")
+
+report = {
+    "diagnosis": final_name,
+    "confidence": round(final_conf, 4),
+    "raw_prediction": CLASSES[pred],
+    "heads_disagree": bool(conflict),
+    "lesion_area_percent": round(area, 3),
+    "uncertainty": round(entropy, 4),
+    "probabilities": {c: round(float(p), 4) for c, p in zip(CLASSES, probs)},
+    "settings": {"threshold": seg_thr, "auto_crop": crop, "intensity_alignment": robust, "flip_averaging": tta},
+    "image_sha1": hashlib.sha1(img_bytes).hexdigest()[:12],
 }
-ex1.download_button("Download Audit Report (JSON)", json.dumps(report_payload, indent=2), "clinical_audit_report.json", "application/json", use_container_width=True)
-ex2.download_button("Download Diagnostic Visuals (PNG)", png_data, "clinical_inspection_panel.png", "image/png", use_container_width=True)
+
+st.write("")
+d1, d2, _ = st.columns([1, 1, 2])
+d1.download_button("Download report (JSON)", json.dumps(report, indent=2), "report.json", "application/json", use_container_width=True)
+d2.download_button("Download panels (PNG)", buf.getvalue(), "panels.png", "image/png", use_container_width=True)
+
+st.markdown('<div class="note">Research prototype for a thesis project. Not a medical device and not for clinical decisions.</div>',
+            unsafe_allow_html=True)
